@@ -9,6 +9,12 @@ import socket
 import socketserver
 import os
 import sys
+import webbrowser
+import threading
+
+# Windows 콘솔 인코딩 오류 방지
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 PORT = 8080
 
@@ -39,32 +45,39 @@ def main():
     local_ip = get_local_ip()
 
     print("=" * 66)
-    print(" 🌙 ARGON OPTICS // Ar-18 전술 야간 투시경 서버 가동")
+    print(" [ARGON OPTICS] Ar-18 Tactical Night Vision Web Server Started")
     print("=" * 66)
     print()
-    print(" [1] PC 브라우저에서 테스트할 때:")
-    print(f"     👉 http://localhost:{PORT}")
+    print(" [1] PC 브라우저 접속 주소:")
+    print(f"     -> http://localhost:{PORT}")
     print()
-    print(" [2] 스마트폰(모바일) 카메라로 실행할 때:")
-    print(f"     👉 http://{local_ip}:{PORT}")
+    print(" [2] 스마트폰(모바일) 카메라 접속 주소:")
+    print(f"     -> http://{local_ip}:{PORT}")
     print()
-    print(" 💡 스마트폰 접속 시 카메라 권한 설정:")
-    print("    • 스마트폰과 PC가 같은 Wi-Fi에 연결되어 있어야 합니다.")
-    print("    • 모바일 크롬 브라우저에서:")
+    print(" [스마트폰 카메라 권한 팁]:")
+    print("    - 스마트폰과 PC가 동일한 Wi-Fi 공유기에 연결되어 있어야 합니다.")
+    print("    - 스마트폰 크롬에서 카메라 권한이 필요할 경우:")
     print("      1) chrome://flags 접속")
-    print("      2) 'unsafely-treat-insecure-origin-as-secure' 검색")
+    print("      2) unsafely-treat-insecure-origin-as-secure 검색")
     print(f"      3) Enabled 설정 후 http://{local_ip}:{PORT} 입력하고 재실행(Relaunch)")
     print("=" * 66)
-    print(" 서버를 종료하려면 Ctrl + C 를 누르세요.")
+    print(" 서버를 종료하려면 터미널에서 Ctrl + C 를 누르세요.")
     print("=" * 66)
     print()
+
+    # 웹 브라우저 자동 실행
+    def open_browser():
+        try:
+            webbrowser.open(f"http://localhost:{PORT}")
+        except Exception:
+            pass
+    threading.Timer(0.8, open_browser).start()
 
     socketserver.TCPServer.allow_reuse_address = True
     try:
         with socketserver.TCPServer(("", PORT), CustomHandler) as httpd:
             httpd.serve_forever()
     except OSError:
-        # 8080 포트 사용 중일 경우 8081로 폴백
         fallback_port = 8081
         print(f"포트 {PORT} 사용 중으로 인해 포트 {fallback_port}로 전환합니다.")
         with socketserver.TCPServer(("", fallback_port), CustomHandler) as httpd:
