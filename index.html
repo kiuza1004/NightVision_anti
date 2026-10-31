@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>ARGON OPTICS // Ar-18 전술 야간 투시경</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#05070c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app" class="argon-app">
+    <!-- ==================== 메인 광학 뷰포트 (시야 가림 제로) ==================== -->
+    <main class="viewport-stage" id="viewportStage">
+      <video id="cameraVideo" playsinline autoplay muted></video>
+      <!-- 실시간 저조도 다중프레임 적분 & 비선형 암부 감마 증폭 렌더링 캔버스 -->
+      <canvas id="nightVisionCanvas"></canvas>
+      <!-- 메인 HUD (윤곽 피킹, 동체 추적 마커, 장노출 가이드) 캔버스 -->
+      <canvas id="detectionCanvas"></canvas>
+
+      <!-- 화면 백라이트 보조 광원 링 (전면 카메라 / 플래시 미지원 기기용) -->
+      <div class="screen-torch-ring hidden" id="screenTorchRing"></div>
+
+      <!-- 광학 비네팅 & 스캔라인 효과 -->
+      <div class="optic-vignette"></div>
+      <div class="scanline-sweep scanning" id="scanlineSweep"></div>
+
+      <!-- ==================== 뷰포트 가장자리 미니멀 HUD ==================== -->
+      <div class="hud-layer">
+        <!-- 최상단 1줄 슬림 텔레메트리 바 -->
+        <header class="hud-top-bar">
+          <div class="argon-status-pill active" id="statusBadge">
+            <div class="ar-element-box">Ar<sub>18</sub></div>
+            <span class="status-led"></span>
+            <span class="status-label" id="statusText">야간 ISP 대기</span>
+          </div>
+
+          <div class="telemetry-cluster">
+            <div class="telemetry-item" title="추정 조도 (Lux)">
+              <span class="tel-key">조도</span>
+              <span class="tel-val" id="luxValue">12 lx</span>
+            </div>
+            <div class="telemetry-item" title="카메라 고정 안정도">
+              <span class="tel-key">안정</span>
+              <div class="stab-bar-wrap">
+                <div class="stab-bar-fill" id="stabBarFill"></div>
+              </div>
+            </div>
+            <div class="telemetry-item" title="실시간 프레임레이트">
+              <span class="tel-val" id="fpsCounter">60 FPS</span>
+            </div>
+            <div class="telemetry-item target-pill hidden" id="targetPill" title="포착된 야간 동체 수">
+              <span class="tel-key">표적</span>
+              <span class="tel-val" id="targetCount">0</span>
+            </div>
+          </div>
+        </header>
+
+        <!-- 좌측 상단 미니 휘도 히스토그램 & 증폭 상태 배지 -->
+        <div class="hud-sub-bar">
+          <div class="hist-card" id="histCard" title="실시간 휘도 분포 히스토그램">
+            <div class="hist-head">
+              <span class="hist-title">LUMINANCE</span>
+              <span class="hist-gain" id="evBadge">γ 0.34 · 2단</span>
+            </div>
+            <canvas id="histCanvas" width="96" height="28"></canvas>
+          </div>
+
+          <div class="quick-top-Right">
+            <button class="hud-chip-btn active" id="dnrToggleBtn" title="모션 적응형 시간축 노이즈 억제 (Temporal DNR)">DNR ON</button>
+            <button class="hud-chip-btn" id="peakingToggleBtn" title="어둠 속 사물 윤곽선 강조 (Edge Peaking)">윤곽피킹</button>
+            <button class="hud-chip-btn active" id="reticleToggleBtn" title="전술 조준선 표시 토글">HUD</button>
+          </div>
+        </div>
+
+        <!-- 원본 비교 모드 안내 배너 (HOLD 중에만 표시) -->
+        <div class="compare-banner hidden" id="compareBanner">
+          <span>RAW ORIGINAL · 야간 증폭 해제 (원본 비교 중)</span>
+        </div>
+
+        <!-- 동체 포착 경고 배너 (야간 레이더 모드에서 표적 확정 시 표시) -->
+        <div class="argon-alert-banner" id="alarmBanner">
+          <svg class="alert-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <circle cx="12" cy="12" r="9"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <div class="alert-content">
+            <span class="alert-title" id="alarmTitle">야간 동체 포착</span>
+            <span class="alert-sub" id="alarmSub">어둠 속에서 이동 표적이 검증되었습니다</span>
+          </div>
+        </div>
+
+        <!-- 장노출 프로그레시브 합성 진행 배너 -->
+        <div class="lx-live-banner hidden" id="lxLiveBanner">
+          <div class="lx-spinner"></div>
+          <div class="lx-title" id="lxProgressTitle">초저조도 장노출 합성 중... 0%</div>
+          <div class="lx-sub" id="lxProgressSub">다중 프레임 빛 적분 진행 중</div>
+        </div>
+
+        <!-- 중앙 투명 전술 조준선 -->
+        <div class="tactical-reticle" id="reticle">
+          <svg class="reticle-svg" viewBox="0 0 200 200">
+            <path class="ret-bracket" d="M 35 15 L 15 15 L 15 35" />
+            <path class="ret-bracket" d="M 165 15 L 185 15 L 185 35" />
+            <path class="ret-bracket" d="M 35 185 L 15 185 L 15 165" />
+            <path class="ret-bracket" d="M 165 185 L 185 185 L 185 165" />
+            <circle class="ret-ring" cx="100" cy="100" r="56" stroke-dasharray="10 8" />
+            <line class="ret-cross" x1="100" y1="30" x2="100" y2="46" />
+            <line class="ret-cross" x1="100" y1="154" x2="100" y2="170" />
+            <line class="ret-cross" x1="30" y1="100" x2="46" y2="100" />
+            <line class="ret-cross" x1="154" y1="100" x2="170" y2="100" />
+            <circle class="ret-center" cx="100" cy="100" r="2.5" />
+          </svg>
+          <span class="hidden" id="reticleHint"></span>
+        </div>
+
+        <!-- 우측 하단 모서리 컴팩트 정밀 돋보기 (터치 지점 4X/8X 야간 증폭 확대) -->
+        <aside class="argon-loupe-card hidden" id="magnifierCard">
+          <div class="loupe-header">
+            <span class="loupe-badge" id="loupeModeBadge">중앙조준</span>
+            <div class="loupe-actions">
+              <button id="loupePowerBtn" class="loupe-mini-btn" title="배율 전환">4X</button>
+              <button id="resetPinBtn" class="loupe-mini-btn hidden" title="고정 해제">해제</button>
+              <button id="closeMagBtn" class="loupe-mini-btn" title="접기">✕</button>
+            </div>
+          </div>
+          <div class="loupe-canvas-wrap" id="loupeCanvasWrap">
+            <canvas id="magnifierCanvas" width="140" height="140"></canvas>
+            <div class="loupe-crosshair"></div>
+          </div>
+          <div class="loupe-footer">
+            <span id="magCaption">야간 증폭 확대</span>
+            <span class="loupe-coord" id="loupeCoord">50%,50%</span>
+          </div>
+        </aside>
+
+        <!-- 돋보기 열기 플로팅 버튼 -->
+        <button class="loupe-restore-btn" id="restoreMagBtn" title="정밀 야간 돋보기 열기">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2">
+            <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <span>돋보기</span>
+        </button>
+
+        <!-- 좌측 하단 스냅샷 미니 프리뷰 토스트 -->
+        <div class="snapshot-toast hidden" id="snapshotToast">
+          <img id="snapshotThumb" alt="Captured snapshot" />
+          <div class="snap-info">
+            <span class="snap-title" id="snapToastTitle">야간 캡처 완료</span>
+            <a id="snapshotDownloadLink" class="snap-dl-btn" download="argon_nightvision.png">이미지 저장</a>
+          </div>
+          <button id="closeSnapToast" class="snap-close">✕</button>
+        </div>
+      </div>
+    </main>
+
+    <!-- ==================== 하단 ARGON CONTROL DECK (통합 컨트롤 패널) ==================== -->
+    <footer class="argon-control-deck">
+      <!-- 1행: 광학 스펙트럼 필터 & 저조도 암부 증폭 단계 -->
+      <div class="deck-filter-row">
+        <div class="optic-filter-bar" aria-label="야간 광학 스펙트럼 필터">
+          <button class="filter-chip active" data-filter="truecolor" title="원래 색감을 유지하며 어두운 암부만 선명하게 증폭">
+            <span class="chip-dot tc"></span>트루컬러 야간
+          </button>
+          <button class="filter-chip" data-filter="emerald" title="전술 야간투시경 P43 녹색 형광체">
+            <span class="chip-dot nv"></span>P43 그린
+          </button>
+          <button class="filter-chip" data-filter="argon" title="아르곤 P45 아이스 시안 고대비 투시">
+            <span class="chip-dot ar"></span>Ar-18 시안
+          </button>
+          <button class="filter-chip" data-filter="mono" title="어둠 속 사물 윤곽선 극대화 모노크롬">
+            <span class="chip-dot mono"></span>윤곽 강조
+          </button>
+          <button class="filter-chip" data-filter="thermal" title="256단계 Ironbow 의사 열화상 스펙트럼">
+            <span class="chip-dot th"></span>열화상
+          </button>
+          <button class="filter-chip" data-filter="standard" title="주간 표준 / 어두울 때 자동 야간 전환">
+            <span class="chip-dot std"></span>주간/자동
+          </button>
+        </div>
+
+        <!-- 저조도 감마 리프트 단계 선택 -->
+        <div class="night-isp-bar" id="nightIspBar">
+          <div class="isp-gain-group">
+            <button class="isp-btn" data-ngain="mid" title="1단 표준 암부 증폭 (γ=0.48)">1단</button>
+            <button class="isp-btn active" data-ngain="max" title="2단 강력 암부 증폭 (γ=0.34)">2단(강)</button>
+            <button class="isp-btn" data-ngain="ultra" title="3단 극저조도 칠흑 증폭 (γ=0.24)">3단(극강)</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2행: 3대 전술 야간 운용 모드 탭 -->
+      <div class="mode-deck" role="tablist">
+        <button class="mode-card active" data-mode="live" id="liveModeBtn" role="tab">
+          <svg class="mode-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+          <div class="mode-text">
+            <span class="mode-name">실시간 야간투시</span>
+            <span class="mode-desc">암부 증폭·터치 돋보기</span>
+          </div>
+        </button>
+
+        <button class="mode-card" data-mode="radar" id="radarModeBtn" role="tab">
+          <svg class="mode-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M2 12h4m12 0h4M12 2v4m0 12v4"/>
+            <circle cx="12" cy="12" r="5"/>
+            <path d="M15.5 8.5L19 5"/>
+          </svg>
+          <div class="mode-text">
+            <span class="mode-name">야간 동체 레이더</span>
+            <span class="mode-desc">암부 모션·윤곽 추적</span>
+          </div>
+        </button>
+
+        <button class="mode-card" data-mode="astro" id="astroModeBtn" role="tab">
+          <svg class="mode-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <circle cx="12" cy="12" r="9" stroke-dasharray="4 2"/>
+            <path d="M12 7v5l3 3"/>
+          </svg>
+          <div class="mode-text">
+            <span class="mode-name">초저조도 장노출</span>
+            <span class="mode-desc">다중프레임 빛 누적</span>
+          </div>
+        </button>
+      </div>
+
+      <!-- 3행: 미세 밝기 부스트(Gain) 슬라이더 / 장노출 옵션 & 광학 배율(Zoom) -->
+      <div class="param-row" id="liveParamRow">
+        <div class="param-block gain-slider-block">
+          <span class="slider-tag">증폭</span>
+          <input type="range" id="subGainSlider" class="argon-slider" min="0.8" max="2.5" step="0.05" value="1.25" title="미세 암부 밝기 부스트 조절">
+          <span class="slider-val" id="subGainVal">×4.5</span>
+          <button class="auto-lux-btn" id="autoLuxBtn" title="현재 조도에 맞춰 최적 증폭 자동 설정">AUTO</button>
+        </div>
+
+        <div class="param-block">
+          <div class="argon-segmented">
+            <button class="seg-item active" data-zoom="1">1.0x</button>
+            <button class="seg-item" data-zoom="2">2.0x</button>
+            <button class="seg-item" data-zoom="3">3.0x</button>
+            <button class="seg-item" data-zoom="4">4.0x</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3행 대체: 초저조도 장노출 전용 설정 바 (장노출 모드 선택 시 표시) -->
+      <div class="param-row hidden" id="astroParamRow">
+        <div class="param-block">
+          <div class="argon-segmented" id="lxModeGroup">
+            <button class="seg-item active" data-lx="hdr" title="Reinhard 톤매핑 HDR 누적 합성">HDR 합성</button>
+            <button class="seg-item" data-lx="max" title="미세 광원 및 별빛 최댓값 누적">MAX 빛모음</button>
+            <button class="seg-item" data-lx="avg" title="다중 프레임 평균 노이즈 완벽 제거">AVG 정밀</button>
+          </div>
+        </div>
+        <div class="param-block">
+          <div class="argon-segmented" id="lxTimeGroup">
+            <button class="seg-item" data-sec="1.5">1.5초</button>
+            <button class="seg-item active" data-sec="3.0">3.0초</button>
+            <button class="seg-item" data-sec="5.0">5.0초</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4행: 전술 액션 독 -->
+      <div class="tactical-dock">
+        <button id="torchBtn" class="dock-btn" title="하드웨어 플래시 및 화면 보조 조명 (Torch)">
+          <svg class="dock-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+            <path d="M18 6c0 2-2 2-2 4v10a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V10c0-2-2-2-2-4V3h12v3z"/>
+            <line x1="6" y1="6" x2="18" y2="6"/>
+            <circle cx="12" cy="14" r="1.5" fill="currentColor"/>
+          </svg>
+          <span class="dock-label">조명</span>
+        </button>
+
+        <button id="compareHoldBtn" class="dock-btn" title="누르고 있는 동안 증폭 전 어두운 원본 화면과 비교">
+          <svg class="dock-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <line x1="12" y1="3" x2="12" y2="21"/>
+          </svg>
+          <span class="dock-label">원본비교</span>
+        </button>
+
+        <button id="startScanBtn" class="argon-core-btn scanning" title="야간 투시 가동 / 장노출 촬영">
+          <div class="core-inner">
+            <svg id="scanSvgIcon" class="core-svg" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="6" width="12" height="12" rx="2"/>
+            </svg>
+            <span class="core-label" id="scanBtnText">ACTIVE</span>
+          </div>
+        </button>
+
+        <button id="soundBtn" class="dock-btn active" title="야간 레이더 소나음 & 셔터음 토글">
+          <svg class="dock-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+            <path id="soundWavePath" d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/>
+          </svg>
+          <span class="dock-label">사운드</span>
+        </button>
+
+        <button id="switchCamBtn" class="dock-btn" title="전/후면 카메라 전환 (시뮬레이션 중 클릭 시 실제 카메라 연결)">
+          <svg class="dock-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+            <path d="M20 10c0-4.4-3.6-8-8-8s-8 3.6-8 8"/>
+            <polyline points="17 7 20 10 23 7"/>
+            <path d="M4 14c0 4.4 3.6 8 8 8s8-3.6 8-8"/>
+            <polyline points="7 17 4 14 1 17"/>
+          </svg>
+          <span class="dock-label">렌즈전환</span>
+        </button>
+
+        <button id="snapshotBtn" class="dock-btn" title="고해상도 야간 투시 화면 캡처">
+          <svg class="dock-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+          <span class="dock-label">캡처</span>
+        </button>
+      </div>
+    </footer>
+
+    <!-- ==================== ARGON 온보딩 모달 ==================== -->
+    <div class="argon-modal" id="startModal">
+      <div class="argon-modal-card">
+        <div class="modal-brand-row">
+          <div class="ar-Periodic-badge">
+            <span class="ar-num">18</span>
+            <span class="ar-sym">Ar</span>
+            <span class="ar-mass">39.948</span>
+          </div>
+          <div class="modal-brand-title">
+            <span class="sys-tag">ARGON TACTICAL OPTICS // v4.0</span>
+            <h1>아르곤 저조도 야간 투시경</h1>
+          </div>
+        </div>
+
+        <p class="modal-lead">
+          하드웨어 수광 부스트(EV+)와 비선형 암부 감마 리프트 LUT, 모션 적응형 다중 프레임 적분(Temporal DNR)을 결합해 어두운 곳을 낮처럼 밝고 선명하게 보여줍니다.
+        </p>
+
+        <div class="feature-grid">
+          <div class="feat-item">
+            <div class="feat-badge">01</div>
+            <div>
+              <strong>트루컬러 고정 암부 증폭 (백화·깜빡임 제로)</strong>
+              <p>밝은 하이라이트는 날아가지 않게 보존하면서 어두운 암부만 최대 8배 증폭하여 원래 색감 그대로 선명하게 복원합니다.</p>
+            </div>
+          </div>
+          <div class="feat-item">
+            <div class="feat-badge">02</div>
+            <div>
+              <strong>모션 적응형 노이즈 제거 & 터치 4X/8X 돋보기</strong>
+              <p>정지 배경의 저조도 열잡음은 시간축 적분으로 상쇄하고, 화면 터치 시 해당 지점을 최대 8배율로 정밀 확대합니다.</p>
+            </div>
+          </div>
+          <div class="feat-item">
+            <div class="feat-badge">03</div>
+            <div>
+              <strong>야간 동체 레이더 & 초저조도 장노출 합성</strong>
+              <p>어둠 속 미세 움직임 추적 레이더와 1.5s~5.0s 다중 프레임 빛 누적(HDR/MAX/AVG) 촬영을 지원합니다.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-btn-stack">
+          <button id="initCamBtn" class="argon-primary-btn">
+            <span>야간 투시 카메라 가동</span>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+            </svg>
+          </button>
+          <button id="simModeBtn" class="argon-secondary-btn">
+            카메라 없이 암실 야간투시 데모 체험
+          </button>
+        </div>
+
+        <p class="modal-privacy">
+          100% 온디바이스(On-Device) 실시간 연산 · 외부 서버 전송 없음 · 비용 0원
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>
