@@ -10,7 +10,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="icon" type="image/png" href="icon.png">
   <link rel="apple-touch-icon" href="icon.png">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=4.4">
 </head>
 <body>
   <div id="app" class="argon-app">
@@ -42,7 +42,7 @@
           <div class="telemetry-cluster">
             <div class="telemetry-item ver-telemetry" title="앱 버전 및 최종 업데이트 일자">
               <span class="tel-key">VER</span>
-              <span class="tel-val ver-val">v4.3 (2026.11.20)</span>
+              <span class="tel-val ver-val">v4.4 (2026.11.21)</span>
             </div>
             <div class="telemetry-item" title="추정 조도 (Lux)">
               <span class="tel-key">조도</span>
@@ -69,7 +69,7 @@
           <div class="hist-card" id="histCard" title="실시간 휘도 분포 히스토그램">
             <div class="hist-head">
               <span class="hist-title">LUMINANCE</span>
-              <span class="hist-gain" id="evBadge">γ 0.34 · 2단</span>
+              <span class="hist-gain" id="evBadge">1단 · 선명</span>
             </div>
             <canvas id="histCanvas" width="96" height="28"></canvas>
           </div>
@@ -192,8 +192,8 @@
         <!-- 저조도 감마 리프트 단계 선택 -->
         <div class="night-isp-bar" id="nightIspBar">
           <div class="isp-gain-group">
-            <button class="isp-btn" data-ngain="mid" title="1단 표준 암부 증폭">1단</button>
-            <button class="isp-btn active" data-ngain="max" title="2단 강력 암부 증폭">2단(강)</button>
+            <button class="isp-btn active" data-ngain="mid" title="1단 표준 선명 암부 복원">1단</button>
+            <button class="isp-btn" data-ngain="max" title="2단 강력 암부 증폭">2단(강)</button>
             <button class="isp-btn" data-ngain="ultra" title="3단 극저조도 칠흑 증폭">3단(극강)</button>
           </div>
         </div>
@@ -251,8 +251,8 @@
       <div class="param-row" id="liveParamRow">
         <div class="param-block gain-slider-block">
           <span class="slider-tag">증폭</span>
-          <input type="range" id="subGainSlider" class="argon-slider" min="0.8" max="2.5" step="0.05" value="1.0" title="미세 암부 밝기 부스트 조절">
-          <span class="slider-val" id="subGainVal">×2.0</span>
+          <input type="range" id="subGainSlider" class="argon-slider" min="0.6" max="2.0" step="0.05" value="1.0" title="미세 암부 밝기 부스트 조절">
+          <span class="slider-val" id="subGainVal">×1.4</span>
           <button class="auto-lux-btn" id="autoLuxBtn" title="현재 조도에 맞춰 최적 증폭 자동 설정">AUTO</button>
         </div>
 
@@ -353,8 +353,8 @@
             <span class="sys-tag">ARGON TACTICAL OPTICS // Ar-18</span>
             <h1>아르곤 저조도 야간 투시경</h1>
             <div class="version-meta-chip">
-              <span class="v-badge">VER v4.3</span>
-              <span class="v-date">최종 업데이트: 2026. 11. 20</span>
+              <span class="v-badge">VER v4.4</span>
+              <span class="v-date">최종 업데이트: 2026. 11. 21</span>
             </div>
           </div>
         </div>
@@ -406,10 +406,12 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=4.4"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js').catch(() => {});
+      navigator.serviceWorker.register('./sw.js?v=4.4').then((reg) => {
+        reg.update();
+      }).catch(() => {});
     }
   </script>
 </body>

@@ -2,8 +2,8 @@
 
 모바일 및 PC 브라우저에서 외부 라이브러리 설치나 빌드 과정 없이 즉시 실행 가능한 고성능 광학 야간 투시(Tactical Night Vision) PWA 웹 애플리케이션 및 Windows 단일 실행파일(.exe)입니다.
 
-- **현재 버전**: v4.3 (Credibility Hybrid HD Low-Light ISP)
-- **최종 업데이트**: 2026-11-20
+- **현재 버전**: v4.4 (Object-Clarity & Zero-Blowout Adaptive Night Vision ISP)
+- **최종 업데이트**: 2026-11-21
 - **GitHub 저장소**: [https://github.com/kiuza1004/NightVision_anti](https://github.com/kiuza1004/NightVision_anti)
 - **온라인 실행 (GitHub Pages)**: [https://kiuza1004.github.io/NightVision_anti/](https://kiuza1004.github.io/NightVision_anti/)
 

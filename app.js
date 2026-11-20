@@ -120,8 +120,8 @@ class ArgonNightVisionApp {
     this.currentMode = 'normal'; // 'normal' (일반 카메라) | 'live' (야간투시) | 'radar' | 'astro'
     this.isNightVisionActive = false; // 선택 시에만 야간투시 활성화
     this.currentFilter = 'standard'; // 'standard' (일반) | 'truecolor' | 'emerald' | 'argon' | 'mono' | 'thermal'
-    this.nightGainLevel = 'max'; // 'mid' | 'max' | 'ultra'
-    this.subGainMultiplier = 1.0; // 0.8 ~ 2.5 미세 부스트 (기본 1.0으로 자연스럽고 선명한 톤)
+    this.nightGainLevel = 'mid'; // 'mid' (1단 선명 기본값) | 'max' (2단) | 'ultra' (3단)
+    this.subGainMultiplier = 1.0; // 0.6 ~ 2.0 미세 부스트 (기본 1.0으로 자연스럽고 선명한 톤)
     this.currentZoom = 1.0;
     this.loupeZoom = 4;
     this.useDnr = true; // Temporal DNR 활성화 여부
@@ -206,36 +206,46 @@ class ArgonNightVisionApp {
   }
 
   // -------------------------------------------------------------
-  // [핵심 ISP] bug_search 검증 S-Curve 하이브리드 고정 LUT
-  // - 센서 노이즈 플로어(0~8) 억제 + 중간 암점 대비 부스트 (하얗게 뜨는 현상 100% 차단)
+  // [핵심 ISP v4.4] 사물 식별 특화 S-Curve 암부 복원 & 자동 백화 방지 LUT
+  // - 블랙 포인트(0~6) 고정으로 뿌연 안개/백화 현상 100% 원천 제거
+  // - 주변 평균 밝기(ambientLum)에 따라 과노출을 자동 억제하고 사물 명암비(Contrast) 극대화
   // -------------------------------------------------------------
-  buildNightLUT() {
-    let gamma = 0.44; // 1단 (mid): 기본 3배 선명 리프트 (균형)
+  buildNightLUT(ambientLum = this.ambientBrightness) {
+    let baseK = 1.15; // 1단 (mid): 사물이 가장 자연스럽고 또렷하게 보이는 표준 게인
+    let label = '1단 · 선명';
     if (this.nightGainLevel === 'max') {
-      gamma = 0.32;   // 2단 (max): 칠흑 속 암부 약 4.5배 리프트
+      baseK = 1.75;   // 2단 (max): 어두운 암부 강화
+      label = '2단 · 강력';
     } else if (this.nightGainLevel === 'ultra') {
-      gamma = 0.24;   // 3단 (ultra): 극저조도 7~8배 리프트
+      baseK = 2.35;   // 3단 (ultra): 칠흑 같은 극저조도 복원
+      label = '3단 · 극강';
     }
 
-    const mult = this.subGainMultiplier; // 0.8 ~ 2.5
+    // 주변이 이미 밝을 때(ambientLum > 40) 화면이 하얗게 타지 않도록 자동 게인 감쇄 (Auto-Ceiling Protection)
+    let autoDamp = 1.0;
+    if (ambientLum > 40) {
+      autoDamp = Math.max(0.20, 1.0 - ((ambientLum - 40) / 100));
+    }
+
+    const effK = baseK * this.subGainMultiplier * autoDamp;
 
     for (let v = 0; v < 256; v++) {
-      const norm = v / 255.0;
-      let val = Math.pow(norm, gamma) * 255.0 * mult;
-
-      // [핵심] 초저조도 센서 노이즈 플로어(0~8) 억제: 어두운 곳이 자글자글 하얗게 뜨는 현상 원천 제거
-      if (v < 8) {
-        val = val * (v / 8.0);
-      } else if (v < 80) {
-        // 암부 피사체 대비 극대화
-        val = val * 1.08;
+      if (v <= 5) {
+        // 바닥 블랙 노이즈 플로어 고정 (화면 전체가 하얗게 들뜨는 현상 방지)
+        this.nvLut[v] = v;
+        continue;
       }
+      const norm = v / 255.0;
+      // 암부(Shadow)만 선택적으로 끌어올리고 중~고조도(Highlight)는 롤오프하여 원본 형태 보존
+      const shadowLift = v + effK * v * Math.pow(1.0 - norm, 1.55);
 
-      this.nvLut[v] = Math.max(0, Math.min(255, Math.round(val)));
+      // 사물의 입체감과 윤곽 경계를 뚜렷하게 만드는 마이크로 S-Curve 명암 대비
+      const contrasted = (shadowLift - 128.0) * 1.06 + 126.0;
+      this.nvLut[v] = Math.max(0, Math.min(255, Math.round(contrasted)));
     }
 
     if (this.evBadge) {
-      this.evBadge.textContent = `${this.nightGainLevel.toUpperCase()} (γ ${gamma.toFixed(2)})`;
+      this.evBadge.textContent = `${label} (×${(1 + effK * 0.5).toFixed(1)})`;
     }
   }
 
@@ -565,7 +575,7 @@ class ArgonNightVisionApp {
     this.nvLumBuffer = new Uint8Array(this.procWidth * this.procHeight);
   }
 
-  async applyHardwareLowLightExposure(enableBoost) {
+  async applyHardwareLowLightExposure(_enableBoost) {
     if (!this.stream) return;
     const track = this.stream.getVideoTracks()[0];
     if (!track || !track.getCapabilities) return;
@@ -573,18 +583,15 @@ class ArgonNightVisionApp {
     try {
       const caps = track.getCapabilities();
       const adv = {};
+      // 하드웨어 노출 보정(EV)을 강제로 높이면 센서 단에서 백화(White Clipping)가 발생하므로 기본(0) 유지
       if (caps.exposureCompensation) {
-        if (enableBoost) {
-          // 백화(White-out)를 방지하는 안전 수광 부스트 (센서 최대치의 50% 리미터)
-          const midExp = (caps.exposureCompensation.min + caps.exposureCompensation.max) * 0.5;
-          adv.exposureCompensation = Math.min(caps.exposureCompensation.max, midExp + (caps.exposureCompensation.max - midExp) * 0.5);
-        } else {
-          // 일반 모드: 기본 자동 노출 (0 또는 중립값 유지)
-          adv.exposureCompensation = 0;
-        }
+        adv.exposureCompensation = 0;
       }
       if (caps.exposureMode && caps.exposureMode.includes('continuous')) {
         adv.exposureMode = 'continuous';
+      }
+      if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) {
+        adv.whiteBalanceMode = 'continuous';
       }
       if (Object.keys(adv).length > 0) {
         await track.applyConstraints({ advanced: [adv] });
@@ -827,64 +834,108 @@ class ArgonNightVisionApp {
     const w = this.simCanvas.width;
     const h = this.simCanvas.height;
     const now = performance.now() * 0.001;
+    const isNormal = this.currentMode === 'normal';
 
-    if (this.currentMode === 'normal') {
-      // 일반 모드: 평상시 밝고 선명한 실내 조명(약 90~120 lx) 시뮬레이션
-      const grad = ctx.createLinearGradient(0, 0, 0, h);
-      grad.addColorStop(0, '#2b394e');
-      grad.addColorStop(1, '#1b2432');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, w, h);
-
-      // 밝은 실내 구조물 (가구, 벽면, 테이블)
-      ctx.fillStyle = '#223042';
-      ctx.fillRect(w * 0.15, h * 0.35, w * 0.7, h * 0.45);
-      ctx.strokeStyle = '#475e7d';
-      ctx.lineWidth = 2.0;
-      ctx.strokeRect(w * 0.15, h * 0.35, w * 0.7, h * 0.45);
-
-      // 천장 조명 글로우
-      const lightGrad = ctx.createRadialGradient(w * 0.5, h * 0.15, 10, w * 0.5, h * 0.15, w * 0.4);
-      lightGrad.addColorStop(0, 'rgba(255, 245, 220, 0.45)');
-      lightGrad.addColorStop(1, 'rgba(255, 245, 220, 0)');
-      ctx.fillStyle = lightGrad;
-      ctx.fillRect(0, 0, w, h * 0.4);
-
-      // 이동 엔티티
-      for (const ent of this.simEntities) {
-        ent.x += ent.vx * 0.7;
-        ent.y += ent.vy * 0.7;
-        if (ent.x < 0.2 || ent.x > 0.8) ent.vx *= -1;
-        if (ent.y < 0.2 || ent.y > 0.8) ent.vy *= -1;
-
-        ctx.save();
-        ctx.translate(ent.x * w, ent.y * h);
-        ctx.fillStyle = '#38bdf8';
-        ctx.beginPath();
-        ctx.ellipse(0, 0, ent.size * 2.2, ent.size * 1.5, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-      }
-      return;
+    // 배경 벽면 & 바닥 (일반 모드는 실내 조명, 야간투시 모드는 어두운 암실)
+    const wallGrad = ctx.createLinearGradient(0, 0, 0, h);
+    if (isNormal) {
+      wallGrad.addColorStop(0, '#2a374b');
+      wallGrad.addColorStop(0.68, '#1e2838');
+      wallGrad.addColorStop(0.69, '#161e2b');
+      wallGrad.addColorStop(1, '#101620');
+    } else {
+      wallGrad.addColorStop(0, '#121924');
+      wallGrad.addColorStop(0.68, '#0c1119');
+      wallGrad.addColorStop(0.69, '#080c12');
+      wallGrad.addColorStop(1, '#05080c');
     }
-
-    // 야간투시 모드: 칠흑 같은 어두운 방(극저조도 2~14 lx) 시뮬레이션
-    const grad = ctx.createRadialGradient(w * 0.5, h * 0.45, 20, w * 0.5, h * 0.5, w * 0.7);
-    grad.addColorStop(0, '#101720');
-    grad.addColorStop(1, '#05080c');
-    ctx.fillStyle = grad;
+    ctx.fillStyle = wallGrad;
     ctx.fillRect(0, 0, w, h);
 
-    // 어둠 속 희미한 배경 구조물 (테이블 및 벽 모서리)
-    ctx.strokeStyle = '#182434';
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(w * 0.15, h * 0.25, w * 0.7, h * 0.5);
+    // 1. 좌측 벽면 책장 및 서적 사물
+    ctx.fillStyle = isNormal ? '#33261e' : '#18120e';
+    ctx.fillRect(w * 0.08, h * 0.18, w * 0.18, h * 0.45);
+    ctx.strokeStyle = isNormal ? '#5c4538' : '#2b201a';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(w * 0.08, h * 0.18, w * 0.18, h * 0.45);
+    // 선반 칸막이 및 책들
+    const bookColors = isNormal
+      ? ['#c0392b', '#2980b9', '#27ae60', '#d35400', '#8e44ad']
+      : ['#4a1813', '#12354d', '#114728', '#522204', '#381b45'];
+    for (let s = 0; s < 3; s++) {
+      const sy = h * (0.28 + s * 0.12);
+      ctx.fillStyle = isNormal ? '#4a372c' : '#241a14';
+      ctx.fillRect(w * 0.08, sy, w * 0.18, 4);
+      for (let b = 0; b < 5; b++) {
+        ctx.fillStyle = bookColors[(s + b) % bookColors.length];
+        ctx.fillRect(w * (0.095 + b * 0.03), sy - 28, w * 0.024, 28);
+      }
+    }
+
+    // 2. 중앙 벽시계 (사물 윤곽 및 시침/분침 식별용)
+    const cx = w * 0.5;
+    const cy = h * 0.22;
+    const cr = 34;
     ctx.beginPath();
-    ctx.moveTo(w * 0.15, h * 0.25); ctx.lineTo(0, 0);
-    ctx.moveTo(w * 0.85, h * 0.25); ctx.lineTo(w, 0);
+    ctx.arc(cx, cy, cr, 0, Math.PI * 2);
+    ctx.fillStyle = isNormal ? '#e2e8f0' : '#263040';
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = isNormal ? '#475569' : '#151c26';
+    ctx.stroke();
+    // 시계 눈금 및 바늘
+    ctx.strokeStyle = isNormal ? '#0f172a' : '#0a0e14';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(now * 0.2) * 18, cy + Math.sin(now * 0.2) * 18);
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(now) * 26, cy + Math.sin(now) * 26);
     ctx.stroke();
 
-    // 어둠 속에서 움직이는 객체
+    // 3. 우측 창문 및 블라인드
+    ctx.fillStyle = isNormal ? '#1e3a5f' : '#0d1a2b';
+    ctx.fillRect(w * 0.72, h * 0.15, w * 0.20, h * 0.36);
+    ctx.strokeStyle = isNormal ? '#64748b' : '#283240';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(w * 0.72, h * 0.15, w * 0.20, h * 0.36);
+    for (let bl = 1; bl < 6; bl++) {
+      const by = h * (0.15 + bl * 0.06);
+      ctx.beginPath();
+      ctx.moveTo(w * 0.72, by);
+      ctx.lineTo(w * 0.92, by);
+      ctx.stroke();
+    }
+
+    // 4. 중앙 책상 및 노트북 모니터 사물
+    ctx.fillStyle = isNormal ? '#3b2d22' : '#1a140f';
+    ctx.fillRect(w * 0.22, h * 0.62, w * 0.56, h * 0.06);
+    ctx.fillRect(w * 0.26, h * 0.68, w * 0.04, h * 0.24);
+    ctx.fillRect(w * 0.70, h * 0.68, w * 0.04, h * 0.24);
+
+    // 모니터 본체 및 화면 텍스트
+    ctx.fillStyle = isNormal ? '#0f172a' : '#090d14';
+    ctx.fillRect(w * 0.38, h * 0.42, w * 0.24, h * 0.16);
+    ctx.strokeStyle = isNormal ? '#475569' : '#243042';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(w * 0.38, h * 0.42, w * 0.24, h * 0.16);
+    ctx.fillStyle = isNormal ? '#334155' : '#18202c';
+    ctx.fillRect(w * 0.47, h * 0.58, w * 0.06, h * 0.04);
+
+    ctx.fillStyle = isNormal ? '#38bdf8' : '#164e63';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('ARGON Ar-18', w * 0.43, h * 0.49);
+    ctx.font = '10px monospace';
+    ctx.fillStyle = isNormal ? '#94a3b8' : '#1e293b';
+    ctx.fillText('OPTIC TARGET OK', w * 0.42, h * 0.53);
+
+    // 5. 책상 위 스탠드 & 머그컵
+    ctx.fillStyle = isNormal ? '#e11d48' : '#4c1120';
+    ctx.fillRect(w * 0.66, h * 0.56, 22, 26);
+    ctx.strokeStyle = isNormal ? '#fda4af' : '#6b2133';
+    ctx.strokeRect(w * 0.66, h * 0.56, 22, 26);
+
+    // 6. 움직이는 표적 객체
     for (const ent of this.simEntities) {
       ent.vx += Math.sin(now * 3.5 + ent.phase) * 0.0003;
       ent.vy += Math.cos(now * 2.8 + ent.phase) * 0.0003;
@@ -896,18 +947,21 @@ class ArgonNightVisionApp {
       ent.x += ent.vx;
       ent.y += ent.vy;
 
-      if (ent.x < 0.2 || ent.x > 0.8) ent.vx *= -1;
-      if (ent.y < 0.2 || ent.y > 0.8) ent.vy *= -1;
+      if (ent.x < 0.15 || ent.x > 0.85) ent.vx *= -1;
+      if (ent.y < 0.2 || ent.y > 0.78) ent.vy *= -1;
 
       const ex = ent.x * w;
       const ey = ent.y * h;
 
       ctx.save();
       ctx.translate(ex, ey);
-      ctx.fillStyle = '#060a10';
+      ctx.fillStyle = isNormal ? '#22c55e' : '#133824';
+      ctx.strokeStyle = isNormal ? '#86efac' : '#1e5236';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.ellipse(0, 0, ent.size * 1.2, ent.size * 0.7, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, ent.size * 2.0, ent.size * 1.3, 0, 0, Math.PI * 2);
       ctx.fill();
+      ctx.stroke();
       ctx.restore();
     }
   }
@@ -925,9 +979,14 @@ class ArgonNightVisionApp {
     const nw = this.procWidth;
     const nh = this.procHeight;
 
-    // [평소 일반 모드 / 원본 비교(HOLD)]: 비디오 직접 노출로 100% 원본 고화질 유지 (백화 0, 선명 화질 100%)
+    // [평소 일반 모드 / 원본 비교(HOLD)]: 실제 카메라는 비디오 직접 노출, 시뮬레이션은 캔버스 1:1 출력
     if (this.currentMode === 'normal' || this.isComparing) {
-      this.nvCanvas.classList.add('hidden');
+      if (this.isSimulation) {
+        this.nvCanvas.classList.remove('hidden');
+        this.nvCtx.drawImage(rawSource, 0, 0, nw, nh);
+      } else {
+        this.nvCanvas.classList.add('hidden');
+      }
       this.hiResCtx.drawImage(rawSource, 0, 0, this.hiResCanvas.width, this.hiResCanvas.height);
 
       if (this.frameCount % 8 === 0) {
@@ -940,7 +999,7 @@ class ArgonNightVisionApp {
       return;
     }
 
-    // [야간투시 모드]: 캔버스 활성화 및 bug_search 고성능 ISP 파이프라인
+    // [야간투시 모드]: 캔버스 활성화 및 사물 식별 특화 ISP 파이프라인
     this.nvCanvas.classList.remove('hidden');
     this.nvCtx.drawImage(rawSource, 0, 0, nw, nh);
     this.hiResCtx.drawImage(rawSource, 0, 0, this.hiResCanvas.width, this.hiResCanvas.height);
@@ -949,10 +1008,10 @@ class ArgonNightVisionApp {
     const data = imgData.data;
     const totalPixels = nw * nh;
 
-    // 1단계: 히스토그램 샘플링
+    // 1단계: 히스토그램 샘플링 및 주변 조도 파악
     this.measureLuminanceAndHist(data);
 
-    // 2단계: bug_search 검증 HD ISP (8x6 그리드 게인 + 안티고스팅 DNR + 엣지 샤프닝)
+    // 2단계: 사물 식별 특화 HD 야간투시 ISP (백화 차단 적응형 LUT + 원색 보존 + 4방향 샤프닝)
     this.runNightVisionISP(data, totalPixels);
     this.nvCtx.putImageData(imgData, 0, 0);
 
@@ -1002,10 +1061,11 @@ class ArgonNightVisionApp {
   }
 
   // -------------------------------------------------------------
-  // [차세대 HD 저조도 야간 투시 ISP 엔진 - bug_search 하이브리드 아키텍처]
-  // 1) 8x6 그리드 기반 국소 대비 증폭 (Fast Local Dynamic Range Booster)
-  // 2) 모션 적응형 안티-고스팅 시간축 노이즈 제거 (Anti-Ghosting Motion Filtering)
-  // 3) 엣지 적응형 4방향 고주파 언샤프 샤프닝 (Edge-Adaptive High-Boost Sharpening)
+  // [차세대 HD 저조도 야간 투시 ISP 엔진 v4.4 - 사물 식별 & 백화 차단 아키텍처]
+  // 1) 실시간 주변 밝기 기반 적응형 LUT 갱신 (Auto-Ceiling 백화 완전 차단)
+  // 2) 8x6 그리드 기반 암부 국소 대비 보정 (Local Dynamic Range Booster)
+  // 3) 고유 색상 비율(Chromaticity) 보존 및 모션 적응형 안티-고스팅 DNR
+  // 4) 엣지 적응형 4방향 고주파 라플라시안 샤프닝 (사물 윤곽/글씨 또렷하게 복원)
   // -------------------------------------------------------------
   runNightVisionISP(data, totalPixels) {
     const nw = this.procWidth;
@@ -1025,6 +1085,9 @@ class ArgonNightVisionApp {
     this.estimatedLux = Math.max(1, Math.round(Math.pow(this.ambientBrightness / 12, 2.1)));
     if (this.luxValue) this.luxValue.textContent = `${this.estimatedLux} lx`;
 
+    // 주변 조도에 맞추어 백화 방지 적응형 LUT 갱신
+    this.buildNightLUT(this.ambientBrightness);
+
     // 2) 시간축 적분 및 샤프닝 버퍼 동기화
     const lut = this.nvLut;
     if (!this.nvAccumBuffer || this.nvAccumBuffer.length !== totalPixels * 3) {
@@ -1039,7 +1102,7 @@ class ArgonNightVisionApp {
       this.nvLumBuffer = new Uint8Array(totalPixels);
     }
 
-    // 3) 8x6 그리드 기반 국소 대비 게인 (초고속 서브샘플링)
+    // 3) 8x6 그리드 기반 국소 대비 게인 (어두운 구석만 선별 보정, 밝은 영역은 1.0 고정)
     const cols = 8;
     const rows = 6;
     const blockW = (nw / cols) | 0;
@@ -1062,19 +1125,19 @@ class ArgonNightVisionApp {
           }
         }
         const bAvg = bCnt > 0 ? (bSum / bCnt) : 128;
-        // 칠흑 같이 어두운 구석은 국소 다이내믹 레인지를 1.20배 확장, 밝은 블록은 1.0 유지 (백화 원천 차단)
-        blockGain[bRow + bx] = bAvg < 30 ? 1.20 : (bAvg < 65 ? 1.10 : 1.0);
+        // 칠흑 같이 어두운 블록(bAvg < 28)만 1.12배 보정, 그 외에는 과노출 방지를 위해 1.0 유지
+        blockGain[bRow + bx] = bAvg < 28 ? 1.12 : (bAvg < 55 ? 1.05 : 1.0);
       }
     }
 
-    // 4) 모션 적응형 안티-고스팅 시간축 적분 & 픽셀 맵핑
+    // 4) 고유 색상 보존 픽셀 매핑 & 모션 적응형 안티-고스팅 시간축 적분
     const accum = this.nvAccumBuffer;
     const lumBuf = this.nvLumBuffer;
     const filter = this.currentFilter;
     const thermal = this.thermalLUT;
     const useDnr = this.useDnr;
     const isPanning = motionShift > 4.5;
-    const baseAlpha = isPanning ? 0.22 : 0.74;
+    const baseAlpha = isPanning ? 0.20 : 0.68;
 
     let pixelIdx = 0;
     for (let y = 0; y < nh; y++) {
@@ -1099,14 +1162,16 @@ class ArgonNightVisionApp {
         let finalR, finalG, finalB;
 
         if (filter === 'emerald') {
-          // P43 군용 전술 에메랄드 형광체
-          finalR = Math.min(255, (liftedLum * 0.12) | 0);
+          // P43 군용 전술 에메랄드 형광체 (깊은 암부 대비 보존으로 사물 윤곽 명확히 구분)
+          const normL = liftedLum / 255.0;
+          finalR = Math.min(255, (normL * normL * 38) | 0);
           finalG = liftedLum;
-          finalB = Math.min(255, (liftedLum * 0.22) | 0);
+          finalB = Math.min(255, (normL * 48) | 0);
         } else if (filter === 'argon') {
           // Ar-18 아이스 시안 고대비 투시
-          finalR = Math.min(255, (liftedLum * 0.18) | 0);
-          finalG = Math.min(255, (liftedLum * 0.95) | 0);
+          const normL = liftedLum / 255.0;
+          finalR = Math.min(255, (normL * normL * 42) | 0);
+          finalG = Math.min(255, (liftedLum * 0.92) | 0);
           finalB = liftedLum;
         } else if (filter === 'mono') {
           // 고대비 모노크롬
@@ -1120,16 +1185,17 @@ class ArgonNightVisionApp {
           finalG = thermal[tIdx + 1];
           finalB = thermal[tIdx + 2];
         } else {
-          // 트루컬러 (truecolor & standard): bug_search 검증 원색 보존 비율
-          finalR = Math.min(255, ((lut[r] * 0.52 + liftedLum * 0.48) * bgain) | 0);
-          finalG = Math.min(255, ((lut[g] * 0.62 + liftedLum * 0.38) * bgain) | 0);
-          finalB = Math.min(255, ((lut[b] * 0.52 + liftedLum * 0.48) * bgain) | 0);
+          // 트루컬러 (truecolor & standard): 원본 RGB 비율(Chromaticity)을 그대로 유지하여 하얀 탈색 방지
+          const colorScale = lum > 4 ? (liftedLum / lum) : 1.0;
+          finalR = Math.min(255, Math.max(0, (r * colorScale) | 0));
+          finalG = Math.min(255, Math.max(0, (g * colorScale) | 0));
+          finalB = Math.min(255, Math.max(0, (b * colorScale) | 0));
         }
 
         if (useDnr) {
           const prevG = accum[j + 1];
           const diff = Math.abs(finalG - prevG);
-          const alpha = diff < 26 ? baseAlpha : 0.18;
+          const alpha = diff < 24 ? baseAlpha : 0.16;
           const invAlpha = 1 - alpha;
 
           const ar = accum[j] * alpha + finalR * invAlpha;
@@ -1154,9 +1220,8 @@ class ArgonNightVisionApp {
       }
     }
 
-    // 5) 엣지 적응형 4방향 고주파 언샤프 샤프닝 (Edge-Adaptive High-Boost Sharpening Pass)
-    // - 평탄한 센서 암부 노이즈(absLap < 6)는 건너뛰고, 사물 윤곽선/글씨/질감만 칼처럼 또렷하게 부스트!
-    const sharpFactor = this.nightGainLevel === 'max' ? 0.45 : 0.55;
+    // 5) 엣지 적응형 4방향 고주파 언샤프 샤프닝 (사물 경계선, 글씨, 텍스처 선명화)
+    const sharpFactor = 0.65;
 
     for (let y = 1; y < nh - 1; y++) {
       const row = y * nw;
@@ -1175,8 +1240,8 @@ class ArgonNightVisionApp {
         const lap = (c << 2) - (l + r + u + d);
         const absLap = Math.abs(lap);
 
-        if (absLap >= 6) {
-          const boost = Math.max(-28, Math.min(28, (lap * sharpFactor) | 0));
+        if (absLap >= 5) {
+          const boost = Math.max(-34, Math.min(34, (lap * sharpFactor) | 0));
           const p = idx * 4;
           data[p]     = Math.max(0, Math.min(255, data[p] + boost));
           data[p + 1] = Math.max(0, Math.min(255, data[p + 1] + boost));
@@ -1569,8 +1634,9 @@ class ArgonNightVisionApp {
 
     const mw = this.magCanvas.width;
     const mh = this.magCanvas.height;
-    const srcW = this.nvCanvas.width;
-    const srcH = this.nvCanvas.height;
+    const srcCanvas = (this.currentMode === 'normal' && !this.isSimulation) ? this.hiResCanvas : this.nvCanvas;
+    const srcW = srcCanvas.width;
+    const srcH = srcCanvas.height;
 
     const cropW = this.loupeZoom === 8 ? 40 : 80;
     const cropH = this.loupeZoom === 8 ? 40 : 80;
@@ -1581,7 +1647,7 @@ class ArgonNightVisionApp {
     this.magCtx.clearRect(0, 0, mw, mh);
     this.magCtx.imageSmoothingEnabled = true;
     this.magCtx.imageSmoothingQuality = 'high';
-    this.magCtx.drawImage(this.nvCanvas, sx, sy, cropW, cropH, 0, 0, mw, mh);
+    this.magCtx.drawImage(srcCanvas, sx, sy, cropW, cropH, 0, 0, mw, mh);
 
     this.loupeCoord.textContent = `${Math.round(this.loupeFocusX * 100)}%, ${Math.round(this.loupeFocusY * 100)}%`;
   }
@@ -1629,8 +1695,9 @@ class ArgonNightVisionApp {
     snapCanvas.height = sh;
     const sCtx = snapCanvas.getContext('2d');
 
-    // 야간 투시 ISP 렌더링 화면
-    sCtx.drawImage(this.nvCanvas, 0, 0, sw, sh);
+    // 야간 투시 또는 일반 카메라 렌더링 화면 캡처
+    const srcCanvas = (this.currentMode === 'normal' && !this.isSimulation) ? this.hiResCanvas : this.nvCanvas;
+    sCtx.drawImage(srcCanvas, 0, 0, sw, sh);
     sCtx.drawImage(this.overlayCanvas, 0, 0, sw, sh);
 
     // 하단 전술 워터마크
@@ -1640,7 +1707,7 @@ class ArgonNightVisionApp {
     sCtx.font = 'bold 11px monospace';
     const stamp = new Date().toLocaleString('ko-KR');
     const modeLabel = this.currentMode === 'normal' ? 'ORIGINAL HD' : `NV-${this.currentFilter.toUpperCase()}`;
-    sCtx.fillText(`ARGON OPTICS [v4.3] // MODE: ${modeLabel} // ${this.estimatedLux} lx // ${stamp}`, 12, sh - 13);
+    sCtx.fillText(`ARGON OPTICS [v4.4] // MODE: ${modeLabel} // ${this.estimatedLux} lx // ${stamp}`, 12, sh - 13);
 
     const dataUrl = snapCanvas.toDataURL('image/png');
     this.showSnapshotToast(dataUrl, '야간 캡처 완료');

@@ -9,8 +9,8 @@
 | 항목 | 상세 내용 |
 | :--- | :--- |
 | **프로젝트명** | ARGON OPTICS // Ar-18 Tactical Night Vision Web App |
-| **버전** | v4.3 (Credibility Hybrid HD Low-Light ISP Edition) |
-| **최종 업데이트** | 2026-11-20 |
+| **버전** | v4.4 (Object-Clarity & Zero-Blowout Adaptive Night Vision ISP Edition) |
+| **최종 업데이트** | 2026-11-21 |
 | **실행 환경** | Windows Standalone 단일 실행파일(.exe), 모바일 및 PC 모던 브라우저 |
 | **기술 스택** | HTML5, CSS3, Vanilla JavaScript (ES6+), Canvas 2D API, Web Audio API, MediaDevices API |
 | **의존성** | 외부 서드파티 라이브러리 0개 (Zero External Dependency, Zero Build Tool) |
