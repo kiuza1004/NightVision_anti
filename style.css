@@ -76,15 +76,7 @@ html, body {
   cursor: crosshair;
 }
 
-#cameraVideo {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  visibility: hidden;
-  pointer-events: none;
-}
-
+#cameraVideo,
 #nightVisionCanvas {
   position: absolute;
   width: 100%;
@@ -92,7 +84,14 @@ html, body {
   object-fit: cover;
   transform-origin: center center;
   transition: transform 0.2s ease-out;
+}
+
+#cameraVideo {
   z-index: 1;
+}
+
+#nightVisionCanvas {
+  z-index: 2;
   display: block;
 }
 

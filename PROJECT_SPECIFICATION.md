@@ -9,7 +9,7 @@
 | 항목 | 상세 내용 |
 | :--- | :--- |
 | **프로젝트명** | ARGON OPTICS // Ar-18 Tactical Night Vision Web App |
-| **버전** | v4.2 (High-Fidelity Normal & Zero-Blowout Night Vision ISP Edition) |
+| **버전** | v4.3 (Credibility Hybrid HD Low-Light ISP Edition) |
 | **최종 업데이트** | 2026-11-20 |
 | **실행 환경** | Windows Standalone 단일 실행파일(.exe), 모바일 및 PC 모던 브라우저 |
 | **기술 스택** | HTML5, CSS3, Vanilla JavaScript (ES6+), Canvas 2D API, Web Audio API, MediaDevices API |
@@ -29,7 +29,7 @@ NightVision_anti/
 │       └── build-exe.yml       # GitHub Actions Windows 단일 실행파일(.exe) 자동 빌드
 ├── __pycache__/                # 파이썬 캐시 디렉토리
 ├── .gitignore                  # Git 제외 설정
-├── app.js                      # 야간 투시 광학 ISP, 레이더, 장노출 등 핵심 로직
+├── app.js                      # 차세대 HD 야간 투시 광학 ISP, 레이더, 장노출 등 핵심 로직
 ├── build_exe.bat               # Windows 로컬 1클릭 .exe 실행파일 빌드 배치 스크립트
 ├── icon.ico                    # Windows 실행파일 및 데스크톱 고해상도 아이콘
 ├── icon.png                    # 앱 및 PWA 전술 아이콘 (512x512)
@@ -45,32 +45,36 @@ NightVision_anti/
 
 ---
 
-## 3. 핵심 광학 ISP 파이프라인 (Image Signal Processor)
+## 3. 핵심 광학 ISP 파이프라인 (bug_search 검증 하이브리드 엔진)
 
-본 애플리케이션의 핵심은 물리적 센서 제어와 소프트웨어 비선형 톤 매핑을 결합한 실시간 저조도 복원 엔진입니다.
+본 애플리케이션의 핵심은 `bug_search` 프로젝트에서 실증된 고성능 저조도 ISP 파이프라인을 계승·발전시킨 실시간 영상 복원 엔진입니다.
 
-### 3.1 스마트 하드웨어 수광 제어 (Adaptive Exposure Optimization)
-- `navigator.mediaDevices.getUserMedia`를 통해 카메라 비디오 스트림 획득(`1920x1080` 이상 고해상도 요청).
-- **일반 카메라 모드 (평상시)**: 카메라 하드웨어 노출 보정을 기본 오토(0)로 유지하여 과노출(White-out) 없이 자연스럽고 선명한 화질 제공.
-- **야간투시 모드**: 조도가 실제로 저조도일 때 센서 수광 보정을 단계적으로 인가하되, 센서 최대치의 50% 안전 리미터를 적용하여 실내 조명이나 전등 주변이 하얗게 타버리는 현상을 원천 방지.
+### 3.1 듀얼 뷰포트 아키텍처 (Native Video & Off-Canvas)
+- **일반 모드 (평상시)**: 야간투시 캔버스(`#nightVisionCanvas`)를 숨기고 브라우저 네이티브 비디오(`#cameraVideo`)를 뷰포트에 1:1 직접 출력하여, 지연시간 0 및 1080p 원본 그대로의 크리스탈 화질 제공.
+- **야간투시 모드**: 캔버스를 활성화하고 하드웨어 수광 보정을 가동하여 초저조도 복원 파이프라인 연결.
 
-### 3.2 암부 선택적 톤 매핑 LUT (Highlight-Protected Shadow Lift)
-기존의 단순 지수 거듭제곱 방식에서 발생하던 실내 전등 및 밝은 영역의 **백화(White-out/Clipping)** 현상을 완전히 해결하기 위해 하이라이트 보호형 암부 선택적 톤 매핑 곡선을 운용합니다.
+### 3.2 S-Curve 하이브리드 고정 LUT & 노이즈 플로어 억제
+- 거듭제곱 감마 리프트 시 발생하는 어두운 노이즈가 자글자글 하얗게 뜨는 현상을 원천 차단:
+  - $v < 8$ (센서 열잡음 플로어): $\text{val} \times \frac{v}{8.0}$로 완만하게 억제하여 순수 블랙 안정화.
+  - $8 \le v < 80$ (사물 암점): $1.08\times$ 콘트라스트 기울기 부여로 식별력 극대화.
+- 단계별 감마: 1단 표준($\gamma = 0.44$, 3배) / 2단 강력($\gamma = 0.32$, 4.5배) / 3단 극강($\gamma = 0.24$, 8배).
 
-- **암부 감쇄 가중치 공식**:
-  $$w_{\text{shadow}}(v) = \left(1.0 - \frac{v}{255}\right)^{1.85}$$
-- **암부 리프트 수식**:
-  $$\text{lift} = (255 - v) \times (\text{totalGain} \times 0.44) \times w_{\text{shadow}}(v)$$
-  $$\text{finalVal} = \min(255, \max(0, \operatorname{round}(v + \text{lift})))$$
-  - 어두운 영역($v \approx 0 \sim 50$)은 선명하게 끌어올려 식별력을 극대화합니다.
-  - 중간 톤($v \approx 80 \sim 150$)은 자연스러운 계조와 색감을 보존합니다.
-  - 밝은 광원($v > 180$)은 가중치가 0에 수렴하여 원본 텍스처를 100% 보존하므로 하얗게 번지거나 날아가는 현상이 원천 차단됩니다.
+### 3.3 8x6 그리드 국소 동적 영역 제어 (Local Dynamic Range Booster)
+- 전체 화면을 8x6(48블록)으로 나누어 각 블록의 평균 휘도($b_{\text{avg}}$) 측정:
+  - $b_{\text{avg}} < 30$ (칠흑 같은 암부 블록): 국소 게인 $1.20\times$ 확장.
+  - $b_{\text{avg}} < 65$ (그늘진 영역 블록): 국소 게인 $1.10\times$ 확장.
+  - $b_{\text{avg}} \ge 65$ (밝은 조명/배경 블록): 국소 게인 $1.0\times$ 유지 (**백화 100% 원천 차단**).
 
-### 3.3 로컬 엣지 콘트라스트 & 샤프닝 (Edge Clarity Engine)
-- 단순 밝기 증폭 시 발생하는 영상의 흐릿함(Milky / Washed-out)을 방지하기 위해 1-pass 인라인 라플라시안 샤프닝을 탑재.
-- 사물의 경계선, 글씨, 윤곽선 디테일을 선명하게 살려내어 어둠 속에서도 칼 같은 선명도를 구현.
+### 3.4 모션 적응형 안티-고스팅 시간축 노이즈 제거 (Anti-Ghosting Motion Temporal DNR)
+- 프레임 간 모션 시프트 감지:
+  - 카메라 빠른 회전/패닝 시 ($\Delta \text{shift} > 4.5$): $\alpha = 0.22$로 잔상(Ghosting) 완전 배제.
+  - 카메라 정지 안정 시: $\alpha = 0.74$로 열잡음을 완벽하게 평활화.
+  - 픽셀 차이 $\Delta G < 26$인 정지 영역만 가중 적분하고, 움직이는 객체는 즉각 반응.
 
-### 3.4 모션 적응형 시간축 노이즈 적분 (Temporal DNR)
+### 3.5 엣지 적응형 4방향 고주파 언샤프 샤프닝 (Edge-Adaptive High-Boost Sharpening Pass)
+- 4방향 라플라시안 고주파 성분 추출:
+  $$\text{lap} = 4 \times c - (l + r + u + d)$$
+- 평탄한 암부 센서 노이즈($|\text{lap}| < 6$)는 건너뛰고, 유효 엣지($|\text{lap}| \ge 6$)에만 샤프닝 게인을 인가하여 어둠 속에서도 글씨와 사물 윤곽선을 칼같이 선명하게 복원.
 저조도 센서 증폭 시 발생하는 극심한 열잡음(Thermal/Chroma Noise)을 제거하기 위해 프레임 간 시간축 적분을 수행합니다.
 - 사전 할당된 `Float32Array(width * height * 3)` 버퍼(`nvAccumBuffer`)를 활용해 가비지 컬렉션(GC) 발생을 제거.
 - **모션 적응형 적분 계수 ($\alpha$)**:

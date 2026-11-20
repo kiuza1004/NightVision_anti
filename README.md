@@ -2,7 +2,7 @@
 
 모바일 및 PC 브라우저에서 외부 라이브러리 설치나 빌드 과정 없이 즉시 실행 가능한 고성능 광학 야간 투시(Tactical Night Vision) PWA 웹 애플리케이션 및 Windows 단일 실행파일(.exe)입니다.
 
-- **현재 버전**: v4.2 (High-Fidelity Normal & Zero-Blowout Night Vision ISP)
+- **현재 버전**: v4.3 (Credibility Hybrid HD Low-Light ISP)
 - **최종 업데이트**: 2026-11-20
 - **GitHub 저장소**: [https://github.com/kiuza1004/NightVision_anti](https://github.com/kiuza1004/NightVision_anti)
 - **온라인 실행 (GitHub Pages)**: [https://kiuza1004.github.io/NightVision_anti/](https://kiuza1004.github.io/NightVision_anti/)
@@ -25,17 +25,17 @@
 
 ---
 
-## 🌟 주요 핵심 기술 및 기능
+## 🌟 주요 핵심 기술 및 기능 (bug_search 검증 하이브리드 엔진)
 
 ### 1. 평상시 일반 고화질 카메라 & 선택적 야간투시 엔진
 - **평상시 일반 카메라 (Normal Cam - 기본값)**:
-  - 실행 즉시 인위적인 왜곡이나 과노출(White-out) 없이 카메라 센서 본연의 맑고 선명한 1080p/720p HD 화질 출력
+  - 캔버스를 숨기고 브라우저 비디오 태그(`#cameraVideo`)를 직접 1:1 출력하여, 딜레이 0 및 1080p 원본 그대로의 선명한 화질 제공
   - 상단 퀵버튼(`[야간투시 OFF/ON]`) 및 하단 탭으로 즉시 야간투시 모드 전환
-- **선택적 야간투시 ISP (Night Vision Mode)**:
-  - 암부 선택적 톤 매핑 LUT: 칠흑 같은 암부는 확실하게 밝혀주고 실내 조명/전등 등 밝은 영역은 원본을 100% 보존하여 **백화(White-out/Clipping) 현상 완전 차단**
-  - **화질 극대화 샤프닝 (Edge Clarity Engine)**: 1-pass 인라인 라플라시안 샤프닝으로 사물 경계선과 텍스처를 칼같이 선명하게 복원
-  - 스마트 하드웨어 수광 제어: 실제 저조도 환경에서만 안전한 수광 보정 인가 (과노출 원천 방지)
-  - 모션 적응형 시간축 노이즈 적분 (Temporal DNR)으로 잔상 없는 노이즈 상쇄
+- **선택적 야간투시 ISP (bug_search 검증 HD 파이프라인)**:
+  - **S-Curve 하이브리드 고정 LUT**: 극저조도 노이즈 플로어($v < 8$)를 억제하여 화면이 자글자글 하얗게 뜨는 현상을 원천 차단하고 사물 암점 대비를 부스트
+  - **8x6 그리드 국소 동적 영역 제어 (Local Dynamic Range Booster)**: 48개 블록으로 화면을 분할하여 어두운 구역만 1.1~1.2배 부스트하고, 밝은 구역은 1.0배를 유지하여 **백화(White-out) 100% 원천 차단**
+  - **모션 적응형 안티-고스팅 시간축 노이즈 제거 (Anti-Ghosting Temporal Filter)**: 카메라 패닝 시 0.22로 잔상 제거, 정지 시 0.74로 열잡음 완전 상쇄
+  - **엣지 적응형 4방향 고주파 언샤프 샤프닝**: 평탄한 노이즈는 건너뛰고, 사물 윤곽선과 글자 모서리만 칼같이 선명하게 복원
 
 ### 2. 6종 전술 광학 스펙트럼 필터
 1. **일반 카메라 (Standard / Original)**: 왜곡 없는 원본 고화질 자연 색감

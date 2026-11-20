@@ -18,7 +18,7 @@
     <main class="viewport-stage" id="viewportStage">
       <video id="cameraVideo" playsinline autoplay muted></video>
       <!-- 실시간 저조도 다중프레임 적분 & 비선형 암부 감마 증폭 렌더링 캔버스 -->
-      <canvas id="nightVisionCanvas"></canvas>
+      <canvas id="nightVisionCanvas" class="hidden"></canvas>
       <!-- 메인 HUD (윤곽 피킹, 동체 추적 마커, 장노출 가이드) 캔버스 -->
       <canvas id="detectionCanvas"></canvas>
 
@@ -42,7 +42,7 @@
           <div class="telemetry-cluster">
             <div class="telemetry-item ver-telemetry" title="앱 버전 및 최종 업데이트 일자">
               <span class="tel-key">VER</span>
-              <span class="tel-val ver-val">v4.2 (2026.11.20)</span>
+              <span class="tel-val ver-val">v4.3 (2026.11.20)</span>
             </div>
             <div class="telemetry-item" title="추정 조도 (Lux)">
               <span class="tel-key">조도</span>
@@ -353,7 +353,7 @@
             <span class="sys-tag">ARGON TACTICAL OPTICS // Ar-18</span>
             <h1>아르곤 저조도 야간 투시경</h1>
             <div class="version-meta-chip">
-              <span class="v-badge">VER v4.2</span>
+              <span class="v-badge">VER v4.3</span>
               <span class="v-date">최종 업데이트: 2026. 11. 20</span>
             </div>
           </div>
