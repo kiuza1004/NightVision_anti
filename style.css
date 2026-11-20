@@ -824,26 +824,52 @@ html, body {
   box-shadow: 0 0 8px var(--ar-emerald-glow);
 }
 
-/* 2행: 3대 탐지/투시 모드 카드 */
+/* 2행: 4대 운용 모드 카드 (일반 카메라 / 야간투시 / 레이더 / 장노출) */
 .mode-deck {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
 }
 
 .mode-card {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--ar-border);
-  border-radius: 10px;
-  padding: 6px 8px;
+  border-radius: 9px;
+  padding: 5px 6px;
   color: var(--ar-text-muted);
   cursor: pointer;
   text-align: left;
   overflow: hidden;
   transition: all 0.15s ease;
+}
+
+@media (max-width: 520px) {
+  .mode-deck {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+  }
+  .mode-card {
+    padding: 5px 3px;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    gap: 2px;
+  }
+  .mode-desc {
+    display: none;
+  }
+  .mode-name {
+    font-size: 9.5px;
+    white-space: nowrap;
+  }
+  .mode-svg {
+    width: 16px;
+    height: 16px;
+  }
 }
 
 .mode-svg {
@@ -1153,6 +1179,40 @@ html, body {
   font-weight: 800;
   color: #fff;
   margin-top: 2px;
+}
+
+.version-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 5px;
+}
+
+.v-badge {
+  background: rgba(0, 240, 255, 0.16);
+  color: var(--ar-cyan);
+  border: 1px solid rgba(0, 240, 255, 0.42);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  padding: 1.5px 6px;
+  border-radius: 4px;
+}
+
+.v-date {
+  color: #94a3b8;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.ver-telemetry {
+  border-color: rgba(0, 240, 255, 0.32);
+}
+
+.ver-val {
+  color: var(--ar-cyan);
+  font-size: 9.5px;
 }
 
 .modal-lead {

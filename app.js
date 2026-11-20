@@ -83,12 +83,13 @@ class ArgonNightVisionApp {
     this.dnrToggleBtn = document.getElementById('dnrToggleBtn');
     this.peakingToggleBtn = document.getElementById('peakingToggleBtn');
     this.reticleToggleBtn = document.getElementById('reticleToggleBtn');
+    this.nvModeQuickBtn = document.getElementById('nvModeQuickBtn');
 
     // -------------------------------------------------------------
-    // 광학 해상도 및 사전 할당 버퍼 (Zero-Allocation 60fps)
+    // 광학 해상도 및 사전 할당 버퍼 (고화질 HD 렌더링 파이프라인)
     // -------------------------------------------------------------
-    this.procWidth = 480;
-    this.procHeight = 360;
+    this.procWidth = 1280;
+    this.procHeight = 720;
     this.nvCanvas.width = this.procWidth;
     this.nvCanvas.height = this.procHeight;
 
@@ -99,25 +100,26 @@ class ArgonNightVisionApp {
 
     // 고해상도 돋보기 및 스냅샷 추출용 캔버스
     this.hiResCanvas = document.createElement('canvas');
-    this.hiResCanvas.width = 640;
-    this.hiResCanvas.height = 480;
+    this.hiResCanvas.width = 1280;
+    this.hiResCanvas.height = 720;
     this.hiResCtx = this.hiResCanvas.getContext('2d');
 
-    // 시뮬레이션 데모용 암실 캔버스
+    // 시뮬레이션 데모용 캔버스
     this.simCanvas = document.createElement('canvas');
-    this.simCanvas.width = 640;
-    this.simCanvas.height = 480;
+    this.simCanvas.width = 1280;
+    this.simCanvas.height = 720;
     this.simCtx = this.simCanvas.getContext('2d');
     this.isSimulation = false;
     this.simEntities = [];
 
     // -------------------------------------------------------------
-    // 광학 파이프라인 제어 상태
+    // 광학 파이프라인 제어 상태 (기본: 평소 일반 고화질 카메라)
     // -------------------------------------------------------------
-    this.currentMode = 'live'; // 'live' | 'radar' | 'astro'
-    this.currentFilter = 'truecolor'; // 'truecolor' | 'emerald' | 'argon' | 'mono' | 'thermal' | 'standard'
-    this.nightGainLevel = 'max'; // 'mid' (γ=0.48) | 'max' (γ=0.34) | 'ultra' (γ=0.24)
-    this.subGainMultiplier = 1.25; // 0.8 ~ 2.5 미세 부스트
+    this.currentMode = 'normal'; // 'normal' (일반 카메라) | 'live' (야간투시) | 'radar' | 'astro'
+    this.isNightVisionActive = false; // 선택 시에만 야간투시 활성화
+    this.currentFilter = 'standard'; // 'standard' (일반) | 'truecolor' | 'emerald' | 'argon' | 'mono' | 'thermal'
+    this.nightGainLevel = 'max'; // 'mid' | 'max' | 'ultra'
+    this.subGainMultiplier = 1.0; // 0.8 ~ 2.5 미세 부스트 (기본 1.0으로 자연스럽고 선명한 톤)
     this.currentZoom = 1.0;
     this.loupeZoom = 4;
     this.useDnr = true; // Temporal DNR 활성화 여부
@@ -202,28 +204,33 @@ class ArgonNightVisionApp {
   }
 
   // -------------------------------------------------------------
-  // [핵심 ISP] 비선형 암부 감마 리프트 룩업 테이블 (백화 방지 전구간 보존)
+  // [핵심 ISP] 비선형 암부 선택적 톤 매핑 룩업 테이블 (백화 100% 방지 & 선명 화질)
   // -------------------------------------------------------------
   buildNightLUT() {
-    let gamma = 0.34; // 기본 2단: 칠흑 속 암부를 약 4.5배 부스트
+    let boost = 2.0; // 기본 2단
     if (this.nightGainLevel === 'mid') {
-      gamma = 0.48; // 1단 표준: 암부 약 2.5배 부스트
+      boost = 1.35; // 1단 표준
     } else if (this.nightGainLevel === 'ultra') {
-      gamma = 0.24; // 3단 극강: 육안 식별 불가한 극저조도 8배 부스트
+      boost = 3.2; // 3단 극강
     }
 
-    const mult = this.subGainMultiplier;
+    const mult = this.subGainMultiplier; // 0.8 ~ 2.5
+    const totalGain = boost * mult;
+
     for (let v = 0; v < 256; v++) {
       const norm = v / 255.0;
-      // 비선형 거듭제곱으로 암부를 강하게 끌어올리고, Reinhard 소프트-니 압축으로 255 클리핑 방지
-      const lifted = Math.pow(norm, gamma) * 255.0 * mult;
-      // 소프트-니 압축: (255 * x) / (x + knee) 결합
-      const safeVal = Math.min(255, Math.round((255 * lifted) / (lifted + 18) * 1.07));
-      this.nvLut[v] = Math.max(0, Math.min(255, safeVal));
+      // 암부 가중치: v가 0(어두움)일 때 1.0, v가 커질수록 급격히 감소
+      // 중간 톤 이상(v > 120)에서는 부스트가 거의 0에 수렴하여 백화(White-out/Clipping)를 원천 차단
+      const shadowWeight = Math.pow(1.0 - norm, 1.85);
+
+      // 암부 선택적 부스트 + 로컬 콘트라스트 보존
+      const lift = (255.0 - v) * (totalGain * 0.44) * shadowWeight;
+      const finalVal = Math.min(255, Math.max(0, Math.round(v + lift)));
+      this.nvLut[v] = finalVal;
     }
 
     if (this.evBadge) {
-      this.evBadge.textContent = `γ ${gamma.toFixed(2)} · ${this.nightGainLevel.toUpperCase()} (×${(1 / gamma * mult).toFixed(1)})`;
+      this.evBadge.textContent = `${this.nightGainLevel.toUpperCase()} (×${(totalGain).toFixed(1)})`;
     }
   }
 
@@ -266,7 +273,18 @@ class ArgonNightVisionApp {
       }
     });
 
-    // 3대 운용 모드 전환
+    // 상단 퀵 야간투시 토글 버튼
+    if (this.nvModeQuickBtn) {
+      this.nvModeQuickBtn.addEventListener('click', () => {
+        if (this.currentMode === 'normal') {
+          this.switchMode('live');
+        } else {
+          this.switchMode('normal');
+        }
+      });
+    }
+
+    // 4대 운용 모드 전환 (일반 카메라 / 야간투시 / 레이더 / 장노출)
     document.querySelectorAll('.mode-card').forEach(btn => {
       btn.addEventListener('click', () => {
         this.switchMode(btn.dataset.mode);
@@ -278,7 +296,18 @@ class ArgonNightVisionApp {
       chip.addEventListener('click', () => {
         document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
         chip.classList.add('active');
-        this.setOpticalFilter(chip.dataset.filter);
+        const filter = chip.dataset.filter;
+        if (filter === 'standard') {
+          this.setOpticalFilter('standard');
+          if (this.currentMode !== 'normal') {
+            this.switchMode('normal');
+          }
+        } else {
+          if (this.currentMode === 'normal') {
+            this.switchMode('live');
+          }
+          this.setOpticalFilter(filter);
+        }
       });
     });
 
@@ -289,13 +318,16 @@ class ArgonNightVisionApp {
         btn.classList.add('active');
         this.nightGainLevel = btn.dataset.ngain;
         this.buildNightLUT();
+        if (this.currentMode === 'normal') {
+          this.switchMode('live');
+        }
       });
     });
 
     // 미세 밝기 슬라이더
     this.subGainSlider.addEventListener('input', () => {
       this.subGainMultiplier = parseFloat(this.subGainSlider.value);
-      this.subGainVal.textContent = `×${(this.subGainMultiplier * 3.6).toFixed(1)}`;
+      this.subGainVal.textContent = `×${(this.subGainMultiplier * 2.0).toFixed(1)}`;
       this.buildNightLUT();
     });
 
@@ -462,7 +494,7 @@ class ArgonNightVisionApp {
   }
 
   // -------------------------------------------------------------
-  // 카메라 초기화 & 하드웨어 저조도 수광 부스트 (EV+)
+  // 카메라 초기화 & 고화질 해상도 동기화
   // -------------------------------------------------------------
   async startCamera() {
     this.updateStatus('카메라 센서 연결 중...', 'normal');
@@ -484,21 +516,47 @@ class ArgonNightVisionApp {
         audio: false,
         video: {
           facingMode: { ideal: this.facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
+          width: { ideal: 1920, min: 1280 },
+          height: { ideal: 1080, min: 720 }
         }
       });
       this.video.srcObject = this.stream;
       await this.video.play();
 
+      this.updateCanvasResolution();
+      this.video.addEventListener('loadedmetadata', () => {
+        this.updateCanvasResolution();
+      }, { once: true });
+
       this.handleResize();
-      this.updateStatus('야간 광학 ISP 가동 중', 'active');
-      this.applyHardwareLowLightExposure(true);
+
+      if (this.currentMode === 'normal') {
+        this.updateStatus('일반 카메라 (고화질 HD)', 'active');
+        this.applyHardwareLowLightExposure(false);
+      } else {
+        this.updateStatus('야간투시 ISP 가동 중', 'active');
+        this.applyHardwareLowLightExposure(true);
+      }
       this.applyHardwareZoom(this.currentZoom);
     } catch (err) {
       console.warn('Camera access failed, falling back to simulation:', err);
       this.startSimulationMode();
     }
+  }
+
+  updateCanvasResolution() {
+    const vw = this.video.videoWidth || 1280;
+    const vh = this.video.videoHeight || 720;
+    
+    // 네이티브 종횡비 유지 및 픽셀 뭉개짐 없는 고해상도 버퍼 유지
+    this.procWidth = Math.min(1920, Math.max(1280, vw));
+    this.procHeight = Math.round(this.procWidth * (vh / vw)) || 720;
+    
+    this.nvCanvas.width = this.procWidth;
+    this.nvCanvas.height = this.procHeight;
+    this.hiResCanvas.width = this.procWidth;
+    this.hiResCanvas.height = this.procHeight;
+    this.nvAccumBuffer = null;
   }
 
   async applyHardwareLowLightExposure(enableBoost) {
@@ -510,9 +568,14 @@ class ArgonNightVisionApp {
       const caps = track.getCapabilities();
       const adv = {};
       if (caps.exposureCompensation) {
-        adv.exposureCompensation = enableBoost
-          ? caps.exposureCompensation.max
-          : (caps.exposureCompensation.min + caps.exposureCompensation.max) * 0.5;
+        if (enableBoost) {
+          // 백화(White-out)를 방지하는 안전 수광 부스트 (센서 최대치의 50% 리미터)
+          const midExp = (caps.exposureCompensation.min + caps.exposureCompensation.max) * 0.5;
+          adv.exposureCompensation = Math.min(caps.exposureCompensation.max, midExp + (caps.exposureCompensation.max - midExp) * 0.5);
+        } else {
+          // 일반 모드: 기본 자동 노출 (0 또는 중립값 유지)
+          adv.exposureCompensation = 0;
+        }
       }
       if (caps.exposureMode && caps.exposureMode.includes('continuous')) {
         adv.exposureMode = 'continuous';
@@ -588,12 +651,16 @@ class ArgonNightVisionApp {
 
   applyAutoLuxGain() {
     // 평균 휘도 기반 최적 감마 단계 및 부스트 자동 인가
+    if (this.currentMode === 'normal') {
+      this.switchMode('live');
+    }
+
     if (this.ambientBrightness < 12) {
       this.nightGainLevel = 'ultra';
-      this.subGainMultiplier = 1.45;
+      this.subGainMultiplier = 1.35;
     } else if (this.ambientBrightness < 28) {
       this.nightGainLevel = 'max';
-      this.subGainMultiplier = 1.25;
+      this.subGainMultiplier = 1.15;
     } else {
       this.nightGainLevel = 'mid';
       this.subGainMultiplier = 1.0;
@@ -603,7 +670,7 @@ class ArgonNightVisionApp {
       b.classList.toggle('active', b.dataset.ngain === this.nightGainLevel);
     });
     this.subGainSlider.value = this.subGainMultiplier;
-    this.subGainVal.textContent = `×${(this.subGainMultiplier * 3.6).toFixed(1)}`;
+    this.subGainVal.textContent = `×${(this.subGainMultiplier * 2.0).toFixed(1)}`;
     this.buildNightLUT();
     this.playSonarPing(1350, 0.08);
   }
@@ -641,11 +708,47 @@ class ArgonNightVisionApp {
 
   switchMode(mode) {
     this.currentMode = mode;
+    this.isNightVisionActive = (mode !== 'normal');
+
     document.querySelectorAll('.mode-card').forEach(b => {
       b.classList.toggle('active', b.dataset.mode === mode);
     });
 
-    if (mode === 'astro') {
+    if (this.nvModeQuickBtn) {
+      if (this.isNightVisionActive) {
+        this.nvModeQuickBtn.textContent = '야간투시 ON';
+        this.nvModeQuickBtn.classList.add('active');
+      } else {
+        this.nvModeQuickBtn.textContent = '야간투시 OFF';
+        this.nvModeQuickBtn.classList.remove('active');
+      }
+    }
+
+    if (mode === 'normal') {
+      this.updateStatus('일반 카메라 (고화질 HD)', 'active');
+      this.applyHardwareLowLightExposure(false);
+      this.liveParamRow.classList.remove('hidden');
+      this.astroParamRow.classList.add('hidden');
+      this.targetPill.classList.add('hidden');
+      this.nvAccumBuffer = null;
+      document.querySelectorAll('.filter-chip').forEach(c => {
+        c.classList.toggle('active', c.dataset.filter === 'standard');
+      });
+      this.currentFilter = 'standard';
+    } else if (mode === 'live') {
+      this.updateStatus('야간투시 ISP 활성 (고화질)', 'active');
+      this.liveParamRow.classList.remove('hidden');
+      this.astroParamRow.classList.add('hidden');
+      this.targetPill.classList.add('hidden');
+      if (this.currentFilter === 'standard') {
+        this.currentFilter = 'truecolor';
+        document.querySelectorAll('.filter-chip').forEach(c => {
+          c.classList.toggle('active', c.dataset.filter === 'truecolor');
+        });
+      }
+      this.applyHardwareLowLightExposure(this.ambientBrightness < 25);
+    } else if (mode === 'astro') {
+      this.updateStatus('초저조도 장노출 대기', 'active');
       this.liveParamRow.classList.add('hidden');
       this.astroParamRow.classList.remove('hidden');
       this.startScanBtn.classList.add('astro-btn');
@@ -654,17 +757,17 @@ class ArgonNightVisionApp {
       this.targetPill.classList.add('hidden');
       this.magCard.classList.add('hidden');
       this.restoreMagBtn.classList.remove('hidden');
-    } else {
+    } else if (mode === 'radar') {
+      this.updateStatus('야간 동체 레이더 감시 중', 'active');
       this.liveParamRow.classList.remove('hidden');
       this.astroParamRow.classList.add('hidden');
+      this.targetPill.classList.remove('hidden');
+    }
+
+    if (mode !== 'astro') {
       this.startScanBtn.classList.remove('astro-btn');
       this.scanBtnText.textContent = 'ACTIVE';
       this.scanSvgIcon.innerHTML = '<rect x="6" y="6" width="12" height="12" rx="2"/>';
-      if (mode === 'radar') {
-        this.targetPill.classList.remove('hidden');
-      } else {
-        this.targetPill.classList.add('hidden');
-      }
     }
   }
 
@@ -705,7 +808,47 @@ class ArgonNightVisionApp {
     const h = this.simCanvas.height;
     const now = performance.now() * 0.001;
 
-    // 칠흑 같은 어두운 방(극저조도 2~14 lx) 시뮬레이션
+    if (this.currentMode === 'normal') {
+      // 일반 모드: 평상시 밝고 선명한 실내 조명(약 90~120 lx) 시뮬레이션
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, '#2b394e');
+      grad.addColorStop(1, '#1b2432');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      // 밝은 실내 구조물 (가구, 벽면, 테이블)
+      ctx.fillStyle = '#223042';
+      ctx.fillRect(w * 0.15, h * 0.35, w * 0.7, h * 0.45);
+      ctx.strokeStyle = '#475e7d';
+      ctx.lineWidth = 2.0;
+      ctx.strokeRect(w * 0.15, h * 0.35, w * 0.7, h * 0.45);
+
+      // 천장 조명 글로우
+      const lightGrad = ctx.createRadialGradient(w * 0.5, h * 0.15, 10, w * 0.5, h * 0.15, w * 0.4);
+      lightGrad.addColorStop(0, 'rgba(255, 245, 220, 0.45)');
+      lightGrad.addColorStop(1, 'rgba(255, 245, 220, 0)');
+      ctx.fillStyle = lightGrad;
+      ctx.fillRect(0, 0, w, h * 0.4);
+
+      // 이동 엔티티
+      for (const ent of this.simEntities) {
+        ent.x += ent.vx * 0.7;
+        ent.y += ent.vy * 0.7;
+        if (ent.x < 0.2 || ent.x > 0.8) ent.vx *= -1;
+        if (ent.y < 0.2 || ent.y > 0.8) ent.vy *= -1;
+
+        ctx.save();
+        ctx.translate(ent.x * w, ent.y * h);
+        ctx.fillStyle = '#38bdf8';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, ent.size * 2.2, ent.size * 1.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      return;
+    }
+
+    // 야간투시 모드: 칠흑 같은 어두운 방(극저조도 2~14 lx) 시뮬레이션
     const grad = ctx.createRadialGradient(w * 0.5, h * 0.45, 20, w * 0.5, h * 0.5, w * 0.7);
     grad.addColorStop(0, '#101720');
     grad.addColorStop(1, '#05080c');
@@ -762,7 +905,23 @@ class ArgonNightVisionApp {
     const nw = this.procWidth;
     const nh = this.procHeight;
 
-    // 원본 프레임 캡처
+    // [평소 일반 모드 / 원본 비교(HOLD)]: 원본 비디오를 고해상도로 1:1 직접 렌더링 (백화 0, 선명 화질 100%)
+    if (this.currentMode === 'normal' || this.isComparing) {
+      this.nvCtx.drawImage(rawSource, 0, 0, nw, nh);
+      this.hiResCtx.drawImage(rawSource, 0, 0, this.hiResCanvas.width, this.hiResCanvas.height);
+
+      if (this.frameCount % 5 === 0) {
+        const sampleData = this.nvCtx.getImageData(0, 0, Math.min(160, nw), Math.min(120, nh)).data;
+        this.measureLuminanceAndHist(sampleData);
+        this.renderMiniHistogram();
+      }
+      this.updateFpsAndTelemetry();
+      this.clearOverlay();
+      this.updateSmoothLoupe();
+      return;
+    }
+
+    // [야간투시 모드]: 암부 고화질 복원 파이프라인
     this.nvCtx.drawImage(rawSource, 0, 0, nw, nh);
     this.hiResCtx.drawImage(rawSource, 0, 0, this.hiResCanvas.width, this.hiResCanvas.height);
 
@@ -770,33 +929,28 @@ class ArgonNightVisionApp {
     const data = imgData.data;
     const totalPixels = nw * nh;
 
-    // 원본 비교(HOLD) 모드인 경우 필터 적용을 바이패스하고 히스토그램만 갱신
-    if (this.isComparing) {
-      this.measureLuminanceAndHist(data);
-      this.renderMiniHistogram();
-      this.updateFpsAndTelemetry();
-      this.clearOverlay();
-      return;
-    }
-
-    // 1단계: 조도 측정 및 자동 야간 활성화 판별
+    // 1단계: 조도 측정
     this.measureLuminanceAndHist(data);
 
-    // 2단계: 야간 투시 ISP 파이프라인 (비선형 감마 리프트 + 모션 적응형 시간축 적분)
+    // 2단계: 야간 투시 ISP 파이프라인 (비선형 암부 선택 리프트 + Temporal DNR)
     this.runNightVisionISP(data, totalPixels);
+
+    // 3단계: [화질 극대화] 사물 모서리 & 디테일 선명도 샤프닝 강화
+    this.applyClarityEnhancement(data, nw, nh);
+
     this.nvCtx.putImageData(imgData, 0, 0);
 
-    // 3단계: 모드별 비전 처리 (레이더 모드 동체 감지)
+    // 4단계: 모드별 비전 처리 (레이더 모드 동체 감지)
     if (this.currentMode === 'radar') {
       this.detectAndTrackMotion(data, nw, nh);
     } else {
       this.clearOverlay();
     }
 
-    // 4단계: 정밀 돋보기 갱신
+    // 5단계: 정밀 돋보기 갱신
     this.updateSmoothLoupe();
 
-    // 5단계: 텔레메트리 및 히스토그램 렌더링
+    // 6단계: 텔레메트리 및 히스토그램 렌더링
     this.renderMiniHistogram();
     this.updateFpsAndTelemetry();
   }
@@ -932,6 +1086,30 @@ class ArgonNightVisionApp {
           data[idx]     = 0;
           data[idx + 1] = 240;
           data[idx + 2] = 255;
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // [화질 극대화] 로컬 엣지 콘트라스트 & 언샤프 마스킹 샤프닝
+  // -------------------------------------------------------------
+  applyClarityEnhancement(data, w, h) {
+    const strength = 0.26;
+    // 인라인 수평 고속 라플라시안 샤프닝 (사물 테두리 & 디테일 또렷하게 복원)
+    for (let y = 0; y < h; y += 2) {
+      const row = y * w * 4;
+      for (let x = 1; x < w - 1; x++) {
+        const idx = row + (x * 4);
+        const lIdx = row + ((x - 1) * 4);
+        const rIdx = row + ((x + 1) * 4);
+
+        const edgeG = (data[idx + 1] << 1) - data[lIdx + 1] - data[rIdx + 1];
+        if (edgeG !== 0) {
+          const boost = edgeG * strength;
+          data[idx]     = Math.min(255, Math.max(0, data[idx] + boost));
+          data[idx + 1] = Math.min(255, Math.max(0, data[idx + 1] + boost));
+          data[idx + 2] = Math.min(255, Math.max(0, data[idx + 2] + boost));
         }
       }
     }
@@ -1359,7 +1537,8 @@ class ArgonNightVisionApp {
     sCtx.fillStyle = '#00f0ff';
     sCtx.font = 'bold 11px monospace';
     const stamp = new Date().toLocaleString('ko-KR');
-    sCtx.fillText(`ARGON NV [Ar-18] // FILTER: ${this.currentFilter.toUpperCase()} // ${this.estimatedLux} lx // ${stamp}`, 12, sh - 13);
+    const modeLabel = this.currentMode === 'normal' ? 'ORIGINAL HD' : `NV-${this.currentFilter.toUpperCase()}`;
+    sCtx.fillText(`ARGON OPTICS // MODE: ${modeLabel} // ${this.estimatedLux} lx // ${stamp}`, 12, sh - 13);
 
     const dataUrl = snapCanvas.toDataURL('image/png');
     this.showSnapshotToast(dataUrl, '야간 캡처 완료');

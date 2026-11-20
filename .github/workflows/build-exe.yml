@@ -1,0 +1,76 @@
+name: Build Windows Executable (NightVision_Ar18.exe)
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Standalone Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Build Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow
+
+      - name: Generate Application Icon
+        run: |
+          python -c "from PIL import Image; img = Image.open('icon.png'); img.save('icon.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+
+      - name: Build Standalone EXE with PyInstaller
+        run: |
+          pyinstaller --noconfirm --clean --onefile `
+            --name "NightVision_Ar18" `
+            --icon "icon.ico" `
+            --add-data "index.html;." `
+            --add-data "app.js;." `
+            --add-data "style.css;." `
+            --add-data "icon.png;." `
+            --add-data "manifest.json;." `
+            --add-data "sw.js;." `
+            server.py
+
+      - name: Verify Executable Output
+        shell: pwsh
+        run: |
+          if (Test-Path "dist\NightVision_Ar18.exe") {
+            $item = Get-Item "dist\NightVision_Ar18.exe"
+            Write-Host "Build Succeeded! File size: $([math]::round($item.Length / 1MB, 2)) MB"
+          } else {
+            Write-Error "Build failed: dist\NightVision_Ar18.exe not found."
+            exit 1
+          }
+
+      - name: Upload Windows Executable Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NightVision_Ar18_Windows_x64
+          path: dist/NightVision_Ar18.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create Release & Attach EXE (Tag Push)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/NightVision_Ar18.exe
+          name: "ARGON OPTICS Ar-18 ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true

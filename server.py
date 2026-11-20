@@ -39,7 +39,11 @@ class CustomHandler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
 def main():
-    app_dir = os.path.dirname(os.path.abspath(__file__))
+    # PyInstaller 1파일 번들(.exe) 실행 환경 지원
+    if getattr(sys, 'frozen', False):
+        app_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(sys.executable)))
+    else:
+        app_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(app_dir)
 
     local_ip = get_local_ip()
